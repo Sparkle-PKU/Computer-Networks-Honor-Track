@@ -1,0 +1,153 @@
+\documentclass{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage{minted}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{booktabs}
+
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\setminted{fontsize=\scriptsize, breaklines=true}
+
+\title[AlphaRTC Evaluation]{Evaluating Video Transmission Quality using AlphaRTC}
+\author[X. Li et al.]{Xinnian Li, Zijun Peng, Bairui Li, Sijie Li, Zhang Zhang}
+\institute{Peking University}
+\date{May 2025}
+
+\begin{document}
+
+\frame{\titlepage}
+
+\begin{frame}{Overview}
+\begin{itemize}
+    \item Use AlphaRTC for real-time video transmission.
+    \item Evaluate video quality using VMAF.
+    \item Estimate network throughput.
+    \item Present results through visualization.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{AlphaRTC and VMAF}
+\textbf{AlphaRTC:}
+\begin{itemize}
+    \item Open platform for real-time communication.
+    \item Uses reinforcement learning for congestion control.
+\end{itemize}
+
+\textbf{VMAF:}
+\begin{itemize}
+    \item Open-source perceptual video quality metric.
+    \item Developed by Netflix.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Video Preprocessing (1)}
+\textbf{Step 1: Resize video}
+\begin{minted}{console}
+ffmpeg -i usain_bolt.mp4 -vf "scale=320:240,setdar=4/3" usain_bolt_0.mp4
+\end{minted}
+
+\textbf{Step 2: Crop 11s–26s}
+\begin{minted}{console}
+ffmpeg -ss 00:00:11 -to 00:00:26 -i usain_bolt_0.mp4 usain_bolt_1.mp4
+\end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Video Preprocessing (2)}
+\textbf{Step 3: Reduce FPS to 10}
+\begin{minted}{console}
+ffmpeg -i usain_bolt_1.mp4 -filter:v fps=10 usain_bolt_10.mp4
+\end{minted}
+
+\textbf{Step 4: Extract YUV and WAV}
+\begin{minted}{console}
+ffmpeg -i usain_bolt_10.mp4 usain_bolt.yuv
+ffmpeg -i usain_bolt_10.mp4 usain_bolt.wav
+\end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Modifying AlphaRTC Code}
+\textbf{Customize BandwidthEstimator.py}
+\begin{minted}{python}
+class Estimator(object):
+    def report_states(self, stats: dict):
+        with open("stats.txt", "a") as f:
+            f.write(str(stats) + "\n")
+
+    def get_estimated_bandwidth(self)->int:
+        return int(1e6) # 1Mbps
+\end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Transmission Command}
+\begin{minted}{console}
+sudo docker run -d --rm \
+  -v <path>/corpus:/app \
+  -w /app --name alphartc \
+  --platform linux/amd64 alphartc \
+  peerconnection_serverless receiver_pyinfer.json
+
+sudo docker exec alphartc \
+  peerconnection_serverless sender_pyinfer.json
+\end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Quality Evaluation with VMAF}
+\begin{minted}{console}
+vmaf --reference usain_bolt.yuv \
+  --distorted out_usain_bolt.yuv \
+  --width 320 --height 240 \
+  --pixel_format 420 --bitdepth 8 \
+  --model version=vmaf_v0.6.1 \
+  --output output.xml --frame_cnt 30
+\end{minted}
+\begin{itemize}
+    \item Compares first 30 frames after frame 24 for best score.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Throughput Estimation Code}
+\begin{minted}{python}
+total_time_ms = 0
+total_payload_size = 0
+stats = [eval(x) for x in open("stats.txt")]
+
+for data in stats:
+    if 'arrival_time_ms' in data:
+        delta = data["arrival_time_ms"] - last_arrival_time
+        total_time_ms += delta
+        last_arrival_time = data["arrival_time_ms"]
+        total_payload_size += int(data["payload_size"])
+
+print(total_payload_size * 1000 / total_time_ms)
+\end{minted}
+\end{frame}
+
+\begin{frame}{Results Summary}
+\begin{itemize}
+    \item \textbf{VMAF Score:} 8.27
+    \item \textbf{Throughput:} 21.89 KB/ms
+    \item VMAF plot saved and analyzed.
+\end{itemize}
+
+\begin{figure}
+\includegraphics[width=0.7\textwidth]{vmaf.png}
+\caption{VMAF Score per Frame}
+\end{figure}
+\end{frame}
+
+\begin{frame}{Conclusion}
+\begin{itemize}
+    \item AlphaRTC + VMAF = efficient evaluation of video quality.
+    \item Preprocessing and frame selection are key.
+    \item Throughput and VMAF provide clear performance metrics.
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\centering
+\Huge \textbf{Thank You!}
+\end{frame}
+
+\end{document}

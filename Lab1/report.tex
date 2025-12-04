@@ -1,0 +1,303 @@
+% \documentclass{article}
+% \usepackage{graphicx} % Required for inserting images
+% \usepackage{minted}
+% \usepackage{fancyhdr}
+% \usepackage{url} 
+% \usepackage[margin = 1in]{geometry}
+% \title{AlphaRTC video transmission quality evaluation}
+% \author{Xinnian Li, Zijun Peng , Bairui Li, Sijie Li, Zhang Zhang}
+% \date{May 2025}
+
+
+% \begin{document}
+% \maketitle
+
+% \thispagestyle{fancy}
+% \fancyhf{} % 清除默认页眉页脚
+% \setlength{\footskip}{0cm} % 调整页脚空间
+% \fancyfoot[L]{
+%     Xinnian Li: 2200012910@stu.pku.edu.cn
+    
+%     Zijun Peng: 2200012909@stu.pku.edu.cn
+    
+%     Bairui Li: 2300011094@stu.pku.edu.cn
+    
+%     Sijie Li: 2200012943@stu.pku.edu.cn 
+
+%     Zhang Zhang: 2200012902@stu.pku.edu.cn
+% }
+% \renewcommand{\footrulewidth}{0.4pt}
+
+% \section{Introduction}
+
+% We use AlphaRTC \cite{eo2022opennetlab} to transmit video and then evaluate the transmission quality using vmaf \cite{vmaf}.
+
+% AlphaRTC is an open platform for real-time communication, and it uses reinforcement learning for congestion control.
+
+% Vmaf is an open-source tool to reflect the viewer’s perception of video quality.
+
+% \section{Implementation}
+
+% In general, we use many command-line tools to meet the requirements of alphaRTC, and then use vmaf to evaluate the quality and write some code to calculate throughput.
+
+% \subsection{Transmission}
+
+% This subsection describes the command line used in transmission.
+
+% When we use AlphaRTC to send a video, we first compress the video to a resolution of $320 \times 240$:
+
+% \begin{minted}[frame=single]{console}
+% $ ffmpeg -i usain_bolt.mp4 -vf "scale=320:240,setdar=4/3" usain_bolt_0.mp4
+% \end{minted}
+
+% We crop the 11-26 seconds of the video:
+
+% \begin{minted}[frame=single]{console}
+% $ ffmpeg -ss 00:00:11 -to 00:00:26 -i usain_bolt_0.mp4 usain_bolt_1.mp4
+% \end{minted}
+
+% We decreased the fps to 10 to reduce the size of the video. After this operation, the number of frames became 30:
+
+% \begin{minted}[frame=single]{console}
+% $ ffmpeg -i usain_bolt_1.mp4 -filter:v fps=10 usain_bolt_10.mp4
+% \end{minted}
+
+% The input of alphaRTC must contain a YUV video file and a WAV audio file, so we generate the two files from mp4:
+
+% \begin{minted}[frame=single]{console}
+% $ ffmpeg -i usain_bolt_10.mp4 usain_bolt.yuv
+% $ ffmpeg -i usain_bolt_10.mp4 usain_bolt.wav
+% \end{minted}
+
+% Check the output YUV file:
+
+% \begin{minted}[frame=single]{console}
+% $ ffprobe -video_size 320x240 -framerate 1 in.yuv
+% Input #0, rawvideo, from 'usain_bolt.yuv':
+%   Duration: 00:01:50.00, start: 0.000000, bitrate: 921 kb/s
+%     Stream #0:0: Video: rawvideo (I420 / 0x30323449), yuv420p, 320x240, 921 kb/s,
+%     ...
+% \end{minted}
+
+% In AlphaRTC, we can modify the \texttt{BandwidthEstimator.py} to output some information into \texttt{stats.txt} for every packet:
+
+
+% \begin{minted}[frame=single, fontsize=\footnotesize, breaklines=true]{python}
+% class Estimator(object):
+%     def report_states(self, stats: dict):
+%         with open("stats.txt", "a") as f:
+%             f.write(str(stats) + "\n")
+%         pass
+
+%     def get_estimated_bandwidth(self)->int:
+%         return int(1e6) # 1Mbps
+% \end{minted}
+
+% At last, we use the following commands provided by AlphaRTC to transmit:
+
+% \begin{minted}[frame=single]{console}
+% $ sudo docker run -d --rm \
+% 	-v <absolute_path>/examples/peerconnection/serverless/corpus:/app \
+% 	-w /app --name alphartc \
+% 	--platform linux/amd64 \
+% 	alphartc peerconnection_serverless receiver_pyinfer.json
+% $ sudo docker exec alphartc $ peerconnection_serverless sender_pyinfer.json
+% $ echo done
+% \end{minted}
+
+% \subsection{Evaluation of Quality}
+
+% We use Vmaf to evalute the quality of the transmission in this subsection:
+
+% We use the official command line and give the width, height, and frame count. Note that the transmission result of AlphaRTC is the repetition of the original video many times. Thus we only compare the first 30 frames of the output with the input. Moreover, we choose a skip distance and only compare 30 frames beginning at 24-th frames, which gives the best VMAF score.
+% We output the result in \texttt{output.xml}, and we show the picture in the section \ref{sec:res}.
+
+% \begin{minted}[frame=single]{console}
+% $ vmaf --reference usain_bolt.yuv --distorted out_usain_bolt.yuv --width 320 --height 240 \
+%     --pixel_format 420 --bitdepth 8 --model version=vmaf_v0.6.1 \
+%     --output output.xml --frame_cnt 30
+% \end{minted}
+
+% \subsection{Throughput Estimation}
+
+% The code uses \texttt{stats.txt} in the previous subsection to estimate the throughput.
+
+% \begin{minted}[frame=single, fontsize=\footnotesize, breaklines=true]{python}
+% last_arrival_time = None
+% total_time_ms = 0
+% total_payload_size = 0
+
+% stats = open("stats.txt", "r").readlines()
+% stats = [eval(x) for x in stats]
+% for json_data in stats:
+%     arrivalTimeMs = json_data["arrival_time_ms"]
+%     payloadSize = json_data["payload_size"]
+
+%     total_payload_size += int(payloadSize)
+%     if last_arrival_time is None:
+%         last_arrival_time = arrivalTimeMs
+%     total_time_ms += arrivalTimeMs - last_arrival_time
+%     last_arrival_time = arrivalTimeMs
+
+% print(total_payload_size * 1000 / total_time_ms) # bytes per ms
+
+% (Output) 21.894274734441478
+% \end{minted}
+
+% \section{Result}
+% \label{sec:res}
+
+% We use \texttt{matplotlib} to plot the vmaf scores in the output file of vmaf \texttt{xml}. The \texttt{xml} file gives a score for every frame.
+
+% \begin{figure}[htbp]
+% \centering
+% \includegraphics[width=\textwidth]{vmaf.png}  % 图片宽度等于文本宽度
+% \label{fig:example}
+% \end{figure}
+
+% The peak shows the high performance in $(25,13.5)$ frames.
+
+% The result of the vmaf of our transmission is: 8.272957.
+
+% The throughput is: 21.89 KB/ms.
+
+% \bibliographystyle{plain}
+% \bibliography{ref}
+
+% \end{document}
+
+
+\documentclass[conference]{IEEEtran}
+\usepackage{graphicx}
+\usepackage{minted}
+\setminted{
+    frame=single,
+    breaklines=true,
+    fontsize=\footnotesize,
+    linenos=false
+}
+\usepackage{fancyhdr}
+\usepackage{url}
+\usepackage{cite}
+\usepackage{caption}
+
+\title{Assessing Video Quality in AlphaRTC via VMAF and Throughput Analysis}
+
+\author{
+\IEEEauthorblockN{
+    Xinnian Li\IEEEauthorrefmark{1}, 
+    Zijun Peng\IEEEauthorrefmark{2}, 
+    Bairui Li\IEEEauthorrefmark{3}, 
+    Sijie Li\IEEEauthorrefmark{4}, 
+    Zhang Zhang\IEEEauthorrefmark{5}}
+\IEEEauthorblockA{
+    \IEEEauthorrefmark{1}2200012910@stu.pku.edu.cn,
+    \IEEEauthorrefmark{2}2200012909@stu.pku.edu.cn,
+    \IEEEauthorrefmark{3}2300011094@stu.pku.edu.cn,\\
+    \IEEEauthorrefmark{4}2200012943@stu.pku.edu.cn,
+    \IEEEauthorrefmark{5}2200012902@stu.pku.edu.cn}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report evaluates the quality of real-time video communication over AlphaRTC, an open-source platform leveraging reinforcement learning for congestion control. We analyze the system's video transmission fidelity using VMAF (Video Multi-Method Assessment Fusion) and measure throughput from packet-level logs.
+\end{abstract}
+
+\section{Introduction}
+AlphaRTC~\cite{eo2022opennetlab} provides a flexible environment for real-time video communication research. It integrates learning-based congestion control algorithms and supports custom packet-level instrumentation. To assess the subjective and objective quality of AlphaRTC's video transmission, we apply the VMAF metric~\cite{vmaf} and compute throughput from transport logs.
+
+\section{Methodology}
+Our evaluation involves preparing the video input, running AlphaRTC in a containerized environment, and computing two metrics: VMAF score for video quality and throughput in KB/ms.
+
+\subsection{Preprocessing Video Input}
+The source video is preprocessed using \texttt{ffmpeg}:
+
+\begin{itemize}
+    \item Resize to $320 \times 240$:
+\begin{minted}[frame=single]{console}
+ffmpeg -i usain_bolt.mp4 -vf "scale=320:240,setdar=4/3" usain_bolt_0.mp4
+\end{minted}
+
+    \item Extract seconds 11–26:
+\begin{minted}[frame=single]{console}
+ffmpeg -ss 00:00:11 -to 00:00:26 -i usain_bolt_0.mp4 usain_bolt_1.mp4
+\end{minted}
+
+    \item Reduce frame rate to 10 fps:
+\begin{minted}[frame=single]{console}
+ffmpeg -i usain_bolt_1.mp4 -filter:v fps=10 usain_bolt_10.mp4
+\end{minted}
+
+    \item Convert to YUV and WAV:
+\begin{minted}[frame=single]{console}
+ffmpeg -i usain_bolt_10.mp4 usain_bolt.yuv
+ffmpeg -i usain_bolt_10.mp4 usain_bolt.wav
+\end{minted}
+\end{itemize}
+
+\subsection{AlphaRTC Execution}
+The platform requires JSON configs for sender and receiver. We launch AlphaRTC using Docker and log packet statistics by modifying the bandwidth estimator:
+
+\begin{minted}[frame=single, fontsize=\footnotesize]{python}
+class Estimator(object):
+    def report_states(self, stats: dict):
+        with open("stats.txt", "a") as f:
+            f.write(str(stats) + "\n")
+\end{minted}
+
+Launch commands:
+\begin{minted}[frame=single]{console}
+sudo docker run -d --rm -v <abs_path>:/app -w /app \
+  --name alphartc --platform linux/amd64 \
+  alphartc peerconnection_serverless receiver.json
+
+sudo docker exec alphartc peerconnection_serverless sender.json
+\end{minted}
+
+\subsection{Video Quality Evaluation}
+Since AlphaRTC may repeat video frames, we select a 30-frame segment for comparison using VMAF:
+
+\begin{minted}[frame=single]{console}
+vmaf --reference usain_bolt.yuv --distorted out_usain_bolt.yuv \
+  --width 320 --height 240 --pixel_format 420 --bitdepth 8 \
+  --model version=vmaf_v0.6.1 --output output.xml --frame_cnt 30
+\end{minted}
+
+\subsection{Throughput Computation}
+From \texttt{stats.txt}, we compute the effective transmission throughput:
+
+\begin{minted}[frame=single, fontsize=\footnotesize, breaklines=true]{python}
+total_time_ms = 0
+total_payload_size = 0
+last_time = None
+stats = [eval(x) for x in open("stats.txt")]
+
+for entry in stats:
+    t = entry["arrival_time_ms"]
+    if last_time is not None:
+        total_time_ms += t - last_time
+    total_payload_size += entry["payload_size"]
+    last_time = t
+
+print(total_payload_size * 1000 / total_time_ms)
+\end{minted}
+
+\section{Results}
+The VMAF score averaged approximately 8.27 across the sampled segment, indicating notable degradation due to compression and frame skipping. The throughput measured was around 21.89 KB/ms.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.48\textwidth]{vmaf.png}
+\caption{Frame-wise VMAF scores from output.xml}
+\label{fig:vmaf}
+\end{figure}
+
+\section{Conclusion}
+By integrating AlphaRTC with VMAF and custom throughput tracking, we demonstrated a repeatable methodology for analyzing real-time video delivery performance. The low VMAF suggests trade-offs in resolution and bitrate need further tuning for better perceptual quality.
+
+\bibliographystyle{IEEEtran}
+\bibliography{ref}
+
+\end{document}
